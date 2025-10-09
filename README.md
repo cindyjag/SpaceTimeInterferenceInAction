@@ -5,12 +5,17 @@
 This repository contains the data and R analysis scripts for the **Perception** and **motor** tasks described in our study on the relationship between temporal and spatial estimation in action.
 
  data/
+ 
  perceptual_data.txt # Combined data file for Perception Task
+ 
  motor_data.txt # Combined data file for Interception Task
 
  scripts/
+ 
  perception.R # Full analysis pipeline for Perception Task
+ 
  motor.R # Full analysis pipeline for Motor Task
+ 
 
 README.md # This file
 
