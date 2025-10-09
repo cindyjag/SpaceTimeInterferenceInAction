@@ -1,6 +1,6 @@
 # SpaceTimeInterferenceInAction
 
-# Temporal and Spatial Estimation Tasks – Data and Analysis
+# Motor and Perception Tasks – Data and Analysis
 
 This repository contains the data and R analysis scripts for the **Perception** and **motor** tasks described in our study on the relationship between temporal and spatial estimation in action.
 
