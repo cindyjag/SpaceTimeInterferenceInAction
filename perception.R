@@ -9,6 +9,7 @@
 # ==============================#
 #         Load Libraries        #
 # ==============================#
+
 library(tidyverse)
 library(lme4)
 library(lmerTest)
@@ -17,6 +18,8 @@ library(sjPlot)
 library(ggplot2)
 library(ggeffects)
 library(emmeans)
+library(DHARMa)
+
 
 # ==============================#
 #        Data Import            #
@@ -26,7 +29,7 @@ library(emmeans)
 
 
 
-all_data <- read.table("D:/dat/perceptual_data.txt", header = TRUE, sep = "\t")
+all_data <- read.table("D:/perceptual_data.txt", header = TRUE, sep = "\t")
 
 # ==============================#
 #      Data Preprocessing       #
@@ -50,11 +53,16 @@ all_data <- all_data %>%
     ans = if_else(rX < 0, 0, 1),
     tcondition = recode(timeCon, short = 0, middle = 1, long = 2),
     scondition = recode(distCon, short = 0, middle = 1, long = 2),
-    task = if_else(task == "viz.VizText(49)", "time", "space")
+    task = case_when(
+      task == "viz.VizText(49)" ~ "time",
+      task == "viz.VizText(51)" ~ "time",
+      TRUE ~ "space"
+    )
   )
 
 # Remove outliers (rTime > 5)
 all_data <- all_data %>% filter(rTime <= 5)
+
 
 # ==============================#
 #    Descriptive Statistics     #
@@ -86,19 +94,74 @@ desc_summary <- all_data %>%
 #     Linear Mixed Models       #
 # ==============================#
 
-# ---- TIME task ----
-model_time <- lmer(ans ~ scondition + (1 | subj) + (1 | tcondition),
-                   data = filter(all_data, task == "time"))
 
-summary(model_time)
-tab_model(model_time)
+# ---- TIME task ----
+##standardize for quadratic function
+all_data_t <- all_data %>%
+  mutate(
+    scondition_c = scondition - mean(scondition, na.rm = TRUE),
+    scondition_c2 = scondition_c^2
+  )
+
+
+model_time_qu <- glmer(
+  ans ~ scondition_c + scondition_c2 +
+    (1 | subj)+ (1 | tcondition),
+  data = filter(all_data_t, task == "time"),
+  family = binomial
+)
+
+model_time_li <- glmer(
+  ans ~ scondition +
+    (1 | subj)+ (1 | tcondition),
+  data = filter(all_data_t, task == "time"),
+  family = binomial
+)
+anova(model_time_li, model_time_qu)
+
+summary(model_time_qu)
+tab_model(model_time_qu)
+
+
+
 
 # ---- SPACE task ----
-model_space <- lmer(ans ~ tcondition + (1 | subj) + (1 | scondition),
-                    data = filter(all_data, task == "space"))
+all_data_s <- all_data %>%
+  mutate(
+    tcondition_c = tcondition - mean(tcondition, na.rm = TRUE),
+    tcondition_c2 = tcondition_c^2
+  )
 
-summary(model_space)
-tab_model(model_space)
+
+model_space_qu <- glmer(
+  ans ~ tcondition_c + tcondition_c2 +
+    (1 | subj)+ (1 | scondition),
+  data = filter(all_data_s, task == "space"),
+  family = binomial
+)
+
+model_space_li <- glmer(
+  ans ~ tcondition +
+    (1 | subj)+ (1 | scondition),
+  data = filter(all_data_s, task == "space"),
+  family = binomial
+)
+
+
+anova(model_space_li, model_space_qu)
+
+summary(model_space_qu)
+tab_model(model_space_qu)
+
+
+
+res_space <- simulateResiduals(
+  fittedModel = model_space_qu,
+  n = 1000
+)
+plot(res_space)
+
+testDispersion(res_space)
 
 # ==============================#
 #     Extract Beta Estimates    #
@@ -108,18 +171,31 @@ tab_model(model_space)
 
 
 # --- TIME betas ---
+
 beta_time <- all_data %>%
   filter(task == "time") %>%
   group_by(subj) %>%
-  group_modify(~ tidy(lm(ans ~ scondition, data = .x))) %>%
-  dplyr::select(subj, term, estimate)
+  group_modify(~ 
+                 tidy(glm(ans ~ scondition,
+                          data = .x,
+                          family = binomial))
+  ) %>%
+  select(subj, term, estimate)
+
+
 
 # --- SPACE betas ---
+
 beta_space <- all_data %>%
   filter(task == "space") %>%
   group_by(subj) %>%
-  group_modify(~ tidy(lm(ans ~ tcondition, data = .x))) %>%
-  dplyr::select(subj, term, estimate)
+  group_modify(~ 
+                 tidy(glm(ans ~ tcondition,
+                          data = .x,
+                          family = binomial))
+  ) %>%
+  select(subj, term, estimate)
+
 
 # ==============================#
 #            Plots              #
@@ -146,9 +222,10 @@ plot_time <- all_data %>%
 
 ggplot(plot_time, aes(x = scondition, y = mean_ans, color = factor(scondition))) +
   geom_point(size = 3) +
-  geom_abline(intercept = 0.5639, slope = -0.0159, color = "#00A08A", size = 1) +
+  #geom_abline(intercept = 0.5639, slope = -0.0159, color = "#00A08A", size = 1) +
   geom_errorbar(aes(ymin = mean_ans - se_ans, ymax = mean_ans + se_ans), width = 0.2, size = 1) +
   labs(x = "Spatial Interstimulus Interval", y = "% too late") +
+#  geom_smooth( aes(x = scondition, y = ans), color = "#00A08A", method="lm", formula = y ~ x + I(x^2),se = FALSE, data = filter(all_data, task == "time"))+
   theme_minimal() +
   large_text_theme +
   coord_cartesian(ylim = c(0.45, 0.65)) +
@@ -165,17 +242,28 @@ plot_space <- all_data %>%
     .groups = "drop"
   )
 
+library(ggeffects)
+
+pred_space <- ggpredict(
+  model_space,
+  terms = "tcondition"
+)
+
 ggplot(plot_space, aes(x = tcondition, y = mean_ans, color = factor(tcondition))) +
   geom_point(size = 3) +
-  geom_abline(intercept = 0.5508, slope = 0.0311, color = "#00A08A", size = 1) +
-  geom_errorbar(aes(ymin = mean_ans - se_ans, ymax = mean_ans + se_ans), width = 0.2, size = 1) +
+ # geom_line(
+  #  data = pred_space,
+   # aes(x = x, y = predicted),
+    #color = "#00A08A",
+#    size = 1.2
+ # ) +
+  geom_errorbar(aes(ymin = mean_ans - se_ans, ymax = mean_ans + se_ans), width = 0.2, size = 1, data = plot_space) +
   labs(x = "Temporal Interstimulus Interval", y = "% too far right") +
   theme_minimal() +
   large_text_theme +
   coord_cartesian(ylim = c(0.45, 0.65)) +
   scale_color_manual(values = c("#E2D200", "#F98400", "#FF0000")) +
   scale_x_continuous(breaks = 0:2, labels = c("short", "medium", "long"))
-
 # ==============================#
 #             Tests             #
 # ==============================#
@@ -188,6 +276,9 @@ t.test(all_data %>% filter(task == "space") %>% group_by(subj) %>%
 t.test(all_data %>% filter(task == "time") %>% group_by(subj) %>%
          summarise(mean_ans = mean(ans)) %>% pull(mean_ans),
        mu = 0.5)
+
+
+
 
 
 
